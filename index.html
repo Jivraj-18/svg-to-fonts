@@ -327,6 +327,7 @@
     let svg2ttfLib;
     let ttf2woffLib;
     let ttf2woff2Lib;
+    let woffAvailable = true;
     let woff2Available = true;
     let svgpathLib;
 
@@ -401,7 +402,7 @@
     }
 
     async function ensureConverterLibs() {
-      if (svg2ttfLib && ttf2woffLib && (!woff2Available || ttf2woff2Lib)) {
+      if (svg2ttfLib && (!woffAvailable || ttf2woffLib) && (!woff2Available || ttf2woff2Lib)) {
         return;
       }
 
@@ -431,16 +432,54 @@
         return candidates.find((item) => typeof item === "function") || null;
       };
 
+      const importFromAny = async (urls) => {
+        let lastError = null;
+        for (const url of urls) {
+          try {
+            return await import(url);
+          } catch (error) {
+            lastError = error;
+          }
+        }
+        throw lastError || new Error("Failed to import module from all sources");
+      };
+
       log("Loading converter libraries...");
-      const [svg2ttfMod, ttf2woffMod, ttf2woff2Result, svgpathMod] = await Promise.all([
-        import("https://esm.sh/svg2ttf@6.0.3?bundle&conditions=browser"),
-        import("https://esm.sh/ttf2woff@3.0.0?bundle&conditions=browser"),
-        import("https://esm.sh/ttf2woff2@8.0.1?bundle&conditions=browser").catch((error) => ({ __loadError: error })),
-        import("https://esm.sh/svgpath@2.6.0?bundle&conditions=browser")
+      const [svg2ttfMod, ttf2woffResult, ttf2woff2Result, svgpathResult] = await Promise.all([
+        importFromAny([
+          "https://esm.sh/svg2ttf@6.0.3?bundle&conditions=browser",
+          "https://cdn.jsdelivr.net/npm/svg2ttf@6.0.3/+esm",
+          "https://unpkg.com/svg2ttf@6.0.3/index.js?module"
+        ]),
+        importFromAny([
+          "https://esm.sh/ttf2woff@3.0.0?bundle&conditions=browser",
+          "https://cdn.jsdelivr.net/npm/ttf2woff@3.0.0/+esm",
+          "https://unpkg.com/ttf2woff@3.0.0/index.js?module"
+        ]).catch((error) => ({ __loadError: error })),
+        importFromAny([
+          "https://esm.sh/ttf2woff2@8.0.1?bundle&conditions=browser",
+          "https://cdn.jsdelivr.net/npm/ttf2woff2@8.0.1/+esm"
+        ]).catch((error) => ({ __loadError: error })),
+        importFromAny([
+          "https://esm.sh/svgpath@2.6.0?bundle&conditions=browser",
+          "https://cdn.jsdelivr.net/npm/svgpath@2.6.0/+esm",
+          "https://unpkg.com/svgpath@2.6.0/index.js?module"
+        ]).catch((error) => ({ __loadError: error }))
       ]);
 
       svg2ttfLib = resolveFn(svg2ttfMod, "svg2ttf");
-      ttf2woffLib = resolveFn(ttf2woffMod, "ttf2woff");
+
+      if (ttf2woffResult && ttf2woffResult.__loadError) {
+        woffAvailable = false;
+        ttf2woffLib = null;
+        log(`Warning: WOFF converter unavailable (${ttf2woffResult.__loadError.message})`);
+      } else {
+        ttf2woffLib = resolveOptionalFn(ttf2woffResult, "ttf2woff");
+        if (!ttf2woffLib) {
+          woffAvailable = false;
+          log("Warning: WOFF converter unavailable, continuing with TTF only");
+        }
+      }
 
       if (ttf2woff2Result && ttf2woff2Result.__loadError) {
         woff2Available = false;
@@ -454,7 +493,11 @@
         }
       }
 
-      svgpathLib = resolveOptionalFn(svgpathMod, "svgpath");
+      if (svgpathResult && svgpathResult.__loadError) {
+        svgpathLib = null;
+      } else {
+        svgpathLib = resolveOptionalFn(svgpathResult, "svgpath");
+      }
 
       log("Converter libraries loaded");
       if (!svgpathLib) {
@@ -672,16 +715,20 @@
       const ttf = svg2ttfLib(svgFont, {});
       const ttfBytes = new Uint8Array(ttf.buffer);
 
-      const woff = ttf2woffLib(ttfBytes);
       downloadBlob(`${fontName}.ttf`, new Blob([ttfBytes], { type: "font/ttf" }));
-      downloadBlob(`${fontName}.woff`, new Blob([new Uint8Array(woff.buffer)], { type: "font/woff" }));
+      if (woffAvailable && typeof ttf2woffLib === "function") {
+        const woff = ttf2woffLib(ttfBytes);
+        downloadBlob(`${fontName}.woff`, new Blob([new Uint8Array(woff.buffer)], { type: "font/woff" }));
+      }
 
-      if (woff2Available && typeof ttf2woff2Lib === "function") {
+      if (woffAvailable && woff2Available && typeof ttf2woff2Lib === "function") {
         const woff2 = ttf2woff2Lib(ttfBytes);
         downloadBlob(`${fontName}.woff2`, new Blob([new Uint8Array(woff2)], { type: "font/woff2" }));
         log("Downloaded: TTF, WOFF, WOFF2");
-      } else {
+      } else if (woffAvailable) {
         log("Downloaded: TTF, WOFF (WOFF2 unavailable in this browser/runtime)");
+      } else {
+        log("Downloaded: TTF (WOFF/WOFF2 unavailable in this browser/runtime)");
       }
     }
 
