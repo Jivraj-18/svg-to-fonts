@@ -62,6 +62,34 @@
       line-height: 1.45;
     }
 
+    .tabs {
+      margin-top: 16px;
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .tab-btn {
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.84);
+      color: var(--ink);
+      font-weight: 700;
+      padding: 10px 14px;
+      border-radius: 999px;
+      cursor: pointer;
+      transition: filter 160ms ease, transform 160ms ease;
+    }
+
+    .tab-btn.active {
+      border: 0;
+      background: linear-gradient(135deg, var(--accent), #14563d);
+      color: #fff;
+    }
+
+    .view.hidden {
+      display: none;
+    }
+
     .grid {
       display: grid;
       gap: 18px;
@@ -154,6 +182,23 @@
       grid-column: 1 / -1;
     }
 
+    .font-preview {
+      border: 1px dashed var(--line);
+      border-radius: 14px;
+      padding: 20px;
+      min-height: 200px;
+      background: rgba(255, 255, 255, 0.6);
+      display: grid;
+      gap: 12px;
+      align-content: start;
+    }
+
+    .font-preview-text {
+      margin: 0;
+      line-height: 1.45;
+      word-break: break-word;
+    }
+
     @keyframes rise {
       from { opacity: 0; transform: translateY(16px); }
       to { opacity: 1; transform: translateY(0); }
@@ -171,9 +216,13 @@
     <div class="header">
       <h1>SVG to TTF / WOFF / WOFF2</h1>
       <p class="subtitle">Select an SVG from this repository, or upload your own file. Conversion runs in your browser and files download directly, with no build step.</p>
+      <div class="tabs" role="tablist" aria-label="Tool tabs">
+        <button id="tabConvert" class="tab-btn active" type="button" role="tab" aria-selected="true">Converter</button>
+        <button id="tabViewer" class="tab-btn" type="button" role="tab" aria-selected="false">Font Viewer</button>
+      </div>
     </div>
 
-    <div class="grid">
+    <div id="converterView" class="grid view">
       <div class="field">
         <label for="svgSelect">SVG from repository</label>
         <select id="svgSelect"></select>
@@ -209,14 +258,42 @@
         <textarea id="log" class="log" readonly></textarea>
       </div>
     </div>
+
+    <div id="viewerView" class="grid view hidden">
+      <div class="field">
+        <label for="fontUpload">Upload font file</label>
+        <input id="fontUpload" type="file" accept=".ttf,.woff,.woff2,font/ttf,font/woff,font/woff2" />
+      </div>
+
+      <div class="field">
+        <label for="fontSize">Preview size</label>
+        <div style="display:flex; gap:10px; align-items:center;">
+          <input id="fontSize" type="range" min="16" max="120" value="48" style="flex:1;" />
+          <span id="fontSizeValue">48px</span>
+        </div>
+      </div>
+
+      <div class="field full">
+        <label for="fontSampleText">Sample text</label>
+        <textarea id="fontSampleText" rows="4">The quick brown fox jumps over the lazy dog 0123456789 !@#$%^&*()</textarea>
+      </div>
+
+      <div class="field full">
+        <label>Font preview</label>
+        <div id="fontPreview" class="font-preview">
+          <strong id="fontPreviewLabel">No font uploaded yet</strong>
+          <p id="fontPreviewText" class="font-preview-text">Upload a font file to preview it here.</p>
+        </div>
+      </div>
+
+      <div class="field full">
+        <label for="viewerLog">Viewer status</label>
+        <textarea id="viewerLog" class="log" readonly></textarea>
+      </div>
+    </div>
   </main>
 
   <script type="module">
-    import svg2ttf from "https://esm.sh/svg2ttf@6.0.3";
-    import ttf2woff from "https://esm.sh/ttf2woff@3.0.0";
-    import ttf2woff2 from "https://esm.sh/ttf2woff2@8.0.1";
-    import svgpath from "https://esm.sh/svgpath@2.6.0";
-
     const SVG_FILES = [
       "blog.svg",
       "book.svg",
@@ -262,12 +339,31 @@
     const refreshBtn = document.getElementById("refreshBtn");
     const preview = document.getElementById("preview");
     const logArea = document.getElementById("log");
+    const tabConvert = document.getElementById("tabConvert");
+    const tabViewer = document.getElementById("tabViewer");
+    const converterView = document.getElementById("converterView");
+    const viewerView = document.getElementById("viewerView");
+    const fontUploadInput = document.getElementById("fontUpload");
+    const fontSizeInput = document.getElementById("fontSize");
+    const fontSizeValue = document.getElementById("fontSizeValue");
+    const fontSampleText = document.getElementById("fontSampleText");
+    const fontPreviewText = document.getElementById("fontPreviewText");
+    const fontPreviewLabel = document.getElementById("fontPreviewLabel");
+    const viewerLogArea = document.getElementById("viewerLog");
 
     const UNITS_PER_EM = 1024;
     const UNICODE = "E001";
 
     let currentSvgText = "";
     let currentSvgSource = "";
+    let uploadedFontUrl = "";
+    let uploadedFontFamily = "";
+    const uploadedSvgMap = new Map();
+
+    let svg2ttfLib;
+    let ttf2woffLib;
+    let ttf2woff2Lib;
+    let svgpathLib;
 
     function log(message) {
       logArea.value += `${message}\n`;
@@ -276,6 +372,15 @@
 
     function resetLog() {
       logArea.value = "";
+    }
+
+    function viewerLog(message) {
+      viewerLogArea.value += `${message}\n`;
+      viewerLogArea.scrollTop = viewerLogArea.scrollHeight;
+    }
+
+    function resetViewerLog() {
+      viewerLogArea.value = "";
     }
 
     function downloadBlob(filename, blob) {
@@ -287,6 +392,27 @@
       a.click();
       a.remove();
       URL.revokeObjectURL(url);
+    }
+
+    async function ensureConverterLibs() {
+      if (svg2ttfLib && ttf2woffLib && ttf2woff2Lib && svgpathLib) {
+        return;
+      }
+
+      log("Loading converter libraries...");
+      const [svg2ttfMod, ttf2woffMod, ttf2woff2Mod, svgpathMod] = await Promise.all([
+        import("https://esm.sh/svg2ttf@6.0.3"),
+        import("https://esm.sh/ttf2woff@3.0.0"),
+        import("https://esm.sh/ttf2woff2@8.0.1"),
+        import("https://esm.sh/svgpath@2.6.0")
+      ]);
+
+      svg2ttfLib = svg2ttfMod.default;
+      ttf2woffLib = ttf2woffMod.default;
+      ttf2woff2Lib = ttf2woff2Mod.default;
+      svgpathLib = svgpathMod.default;
+
+      log("Converter libraries loaded");
     }
 
     async function loadRepoSvg(fileName) {
@@ -304,6 +430,64 @@
         .replace(/[^a-z0-9-_]+/g, "-")
         .replace(/^-+|-+$/g, "");
       return out || fallback;
+    }
+
+    function inferFontFormat(fileName) {
+      const lower = fileName.toLowerCase();
+      if (lower.endsWith(".woff2")) {
+        return "woff2";
+      }
+      if (lower.endsWith(".woff")) {
+        return "woff";
+      }
+      return "truetype";
+    }
+
+    function setTab(tabName) {
+      const showConverter = tabName === "converter";
+      converterView.classList.toggle("hidden", !showConverter);
+      viewerView.classList.toggle("hidden", showConverter);
+
+      tabConvert.classList.toggle("active", showConverter);
+      tabViewer.classList.toggle("active", !showConverter);
+      tabConvert.setAttribute("aria-selected", String(showConverter));
+      tabViewer.setAttribute("aria-selected", String(!showConverter));
+    }
+
+    function updateFontPreviewText() {
+      const size = Number(fontSizeInput.value) || 48;
+      fontSizeValue.textContent = `${size}px`;
+      fontPreviewText.style.fontSize = `${size}px`;
+      fontPreviewText.textContent = fontSampleText.value || " ";
+    }
+
+    function applyUploadedFont(file) {
+      if (uploadedFontUrl) {
+        URL.revokeObjectURL(uploadedFontUrl);
+      }
+
+      uploadedFontUrl = URL.createObjectURL(file);
+      uploadedFontFamily = `uploaded-${sanitizeName(file.name.replace(/\.[^.]+$/, ""), "font")}-${Date.now()}`;
+
+      const format = inferFontFormat(file.name);
+      let styleTag = document.getElementById("uploadedFontStyle");
+      if (!styleTag) {
+        styleTag = document.createElement("style");
+        styleTag.id = "uploadedFontStyle";
+        document.head.appendChild(styleTag);
+      }
+
+      styleTag.textContent = `
+@font-face {
+  font-family: '${uploadedFontFamily}';
+  src: url('${uploadedFontUrl}') format('${format}');
+}
+`;
+
+      fontPreviewText.style.fontFamily = `'${uploadedFontFamily}', "Space Grotesk", sans-serif`;
+      fontPreviewLabel.textContent = `Loaded: ${file.name}`;
+      viewerLog(`Loaded font: ${file.name} (${format})`);
+      updateFontPreviewText();
     }
 
     function parseViewBox(svgRoot) {
@@ -359,7 +543,7 @@
         .map((el) => (el.getAttribute("d") || "").trim())
         .filter(Boolean)
         .map((d) =>
-          svgpath(d)
+          svgpathLib(d)
             .abs()
             .matrix(matrixA, matrixB, matrixC, matrixD, matrixE, matrixF)
             .round(4)
@@ -433,11 +617,13 @@
       const pathData = extractPathData(currentSvgText);
       const svgFont = buildSvgFont({ fontName, glyphName, pathData });
 
-      const ttf = svg2ttf(svgFont, {});
+      await ensureConverterLibs();
+
+      const ttf = svg2ttfLib(svgFont, {});
       const ttfBytes = new Uint8Array(ttf.buffer);
 
-      const woff = ttf2woff(ttfBytes);
-      const woff2 = ttf2woff2(ttfBytes);
+      const woff = ttf2woffLib(ttfBytes);
+      const woff2 = ttf2woff2Lib(ttfBytes);
 
       downloadBlob(`${fontName}.ttf`, new Blob([ttfBytes], { type: "font/ttf" }));
       downloadBlob(`${fontName}.woff`, new Blob([new Uint8Array(woff.buffer)], { type: "font/woff" }));
@@ -451,6 +637,15 @@
       if (!selected) {
         return;
       }
+      if (selected.startsWith("uploaded:")) {
+        const svgText = uploadedSvgMap.get(selected);
+        if (!svgText) {
+          throw new Error("Uploaded SVG not found");
+        }
+        await setCurrentSvg(svgText, `Uploaded file: ${selected.replace("uploaded:", "")}`);
+        return;
+      }
+
       const svgText = await loadRepoSvg(selected);
       await setCurrentSvg(svgText, `Repository file: ${selected}`);
     }
@@ -490,6 +685,18 @@
       }
       try {
         const text = await file.text();
+        const uploadedKey = `uploaded:${file.name}`;
+        uploadedSvgMap.set(uploadedKey, text);
+
+        let option = svgSelect.querySelector(`option[value="${uploadedKey}"]`);
+        if (!option) {
+          option = document.createElement("option");
+          option.value = uploadedKey;
+          option.textContent = `${file.name} (uploaded)`;
+          svgSelect.appendChild(option);
+        }
+
+        svgSelect.value = uploadedKey;
         await setCurrentSvg(text, `Uploaded file: ${file.name}`);
         log(`Loaded local file: ${file.name}`);
       } catch (error) {
@@ -516,9 +723,41 @@
       }
     });
 
+    tabConvert.addEventListener("click", () => {
+      setTab("converter");
+    });
+
+    tabViewer.addEventListener("click", () => {
+      setTab("viewer");
+    });
+
+    fontUploadInput.addEventListener("change", () => {
+      const file = fontUploadInput.files && fontUploadInput.files[0];
+      if (!file) {
+        return;
+      }
+      try {
+        applyUploadedFont(file);
+      } catch (error) {
+        viewerLog(`Error: ${error.message}`);
+      }
+    });
+
+    fontSampleText.addEventListener("input", () => {
+      updateFontPreviewText();
+    });
+
+    fontSizeInput.addEventListener("input", () => {
+      updateFontPreviewText();
+    });
+
     init().catch((error) => {
       log(`Error: ${error.message}`);
     });
+
+    resetViewerLog();
+    viewerLog("Upload a TTF, WOFF, or WOFF2 file to preview.");
+    updateFontPreviewText();
   </script>
 </body>
 </html>
