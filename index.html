@@ -294,43 +294,6 @@
   </main>
 
   <script type="module">
-    const SVG_FILES = [
-      "blog.svg",
-      "book.svg",
-      "books.svg",
-      "bullhorn.svg",
-      "camera.svg",
-      "clubs.svg",
-      "connection.svg",
-      "diamonds.svg",
-      "dice.svg",
-      "droplet.svg",
-      "eyedropper.svg",
-      "feed.svg",
-      "film.svg",
-      "headphones.svg",
-      "home.svg",
-      "home2.svg",
-      "home3.svg",
-      "image.svg",
-      "images.svg",
-      "library.svg",
-      "mic.svg",
-      "music.svg",
-      "newspaper.svg",
-      "office.svg",
-      "pacman.svg",
-      "paint-format.svg",
-      "pen.svg",
-      "pencil.svg",
-      "pencil2.svg",
-      "play.svg",
-      "podcast.svg",
-      "quill.svg",
-      "spades.svg",
-      "video-camera.svg"
-    ];
-
     const svgSelect = document.getElementById("svgSelect");
     const localSvgInput = document.getElementById("localSvg");
     const fontNameInput = document.getElementById("fontName");
@@ -359,6 +322,7 @@
     let uploadedFontUrl = "";
     let uploadedFontFamily = "";
     const uploadedSvgMap = new Map();
+    let discoveredSvgFiles = [];
 
     let svg2ttfLib;
     let ttf2woffLib;
@@ -394,8 +358,49 @@
       URL.revokeObjectURL(url);
     }
 
+    function getGitHubRepoContext() {
+      const hostParts = window.location.hostname.split(".");
+      if (hostParts.length < 3 || hostParts[1] !== "github" || hostParts[2] !== "io") {
+        return null;
+      }
+
+      const owner = hostParts[0];
+      const pathParts = window.location.pathname.split("/").filter(Boolean);
+      const repo = pathParts[0];
+      if (!owner || !repo) {
+        return null;
+      }
+
+      return { owner, repo };
+    }
+
+    async function loadSvgFilesFromDirectory() {
+      const repoContext = getGitHubRepoContext();
+      if (!repoContext) {
+        throw new Error("Could not infer GitHub repository from URL");
+      }
+
+      const apiUrl = `https://api.github.com/repos/${repoContext.owner}/${repoContext.repo}/contents/svgs`;
+      const response = await fetch(apiUrl, { cache: "no-store" });
+      if (!response.ok) {
+        throw new Error("Could not read svgs directory from GitHub API");
+      }
+
+      const entries = await response.json();
+      const files = entries
+        .filter((entry) => entry && entry.type === "file" && /\.svg$/i.test(entry.name))
+        .map((entry) => entry.name)
+        .sort((a, b) => a.localeCompare(b));
+
+      if (!files.length) {
+        throw new Error("No SVG files found in svgs directory");
+      }
+
+      return files;
+    }
+
     async function ensureConverterLibs() {
-      if (svg2ttfLib && ttf2woffLib && ttf2woff2Lib && svgpathLib) {
+      if (svg2ttfLib && ttf2woffLib && ttf2woff2Lib) {
         return;
       }
 
@@ -414,6 +419,17 @@
         return fn;
       };
 
+      const resolveOptionalFn = (mod, named) => {
+        const candidates = [
+          mod,
+          mod && mod.default,
+          mod && mod[named],
+          mod && mod.default && mod.default.default,
+          mod && mod.default && mod.default[named]
+        ];
+        return candidates.find((item) => typeof item === "function") || null;
+      };
+
       log("Loading converter libraries...");
       const [svg2ttfMod, ttf2woffMod, ttf2woff2Mod, svgpathMod] = await Promise.all([
         import("https://esm.sh/svg2ttf@6.0.3"),
@@ -425,9 +441,12 @@
       svg2ttfLib = resolveFn(svg2ttfMod, "svg2ttf");
       ttf2woffLib = resolveFn(ttf2woffMod, "ttf2woff");
       ttf2woff2Lib = resolveFn(ttf2woff2Mod, "ttf2woff2");
-      svgpathLib = resolveFn(svgpathMod, "svgpath");
+      svgpathLib = resolveOptionalFn(svgpathMod, "svgpath");
 
       log("Converter libraries loaded");
+      if (!svgpathLib) {
+        log("Warning: svgpath could not be loaded, using raw path data fallback");
+      }
     }
 
     async function loadRepoSvg(fileName) {
@@ -554,16 +573,19 @@
       const matrixE = -viewBox.minX * sx;
       const matrixF = UNITS_PER_EM + viewBox.minY * sy;
 
-      const transformedPaths = pathElements
+      const rawPaths = pathElements
         .map((el) => (el.getAttribute("d") || "").trim())
-        .filter(Boolean)
-        .map((d) =>
-          svgpathLib(d)
-            .abs()
-            .matrix(matrixA, matrixB, matrixC, matrixD, matrixE, matrixF)
-            .round(4)
-            .toString()
-        );
+        .filter(Boolean);
+
+      const transformedPaths = typeof svgpathLib === "function"
+        ? rawPaths.map((d) =>
+            svgpathLib(d)
+              .abs()
+              .matrix(matrixA, matrixB, matrixC, matrixD, matrixE, matrixF)
+              .round(4)
+              .toString()
+          )
+        : rawPaths;
 
       if (!transformedPaths.length) {
         throw new Error("No valid path data found in SVG");
@@ -629,10 +651,10 @@
       log(`Using glyph name: ${glyphName}`);
       log(`Source: ${currentSvgSource}`);
 
+      await ensureConverterLibs();
+
       const pathData = extractPathData(currentSvgText);
       const svgFont = buildSvgFont({ fontName, glyphName, pathData });
-
-      await ensureConverterLibs();
 
       const ttf = svg2ttfLib(svgFont, {});
       const ttfBytes = new Uint8Array(ttf.buffer);
@@ -669,20 +691,21 @@
       resetLog();
       log("Initializing single-file app...");
 
+      discoveredSvgFiles = await loadSvgFilesFromDirectory();
       svgSelect.innerHTML = "";
-      for (const file of SVG_FILES) {
+      for (const file of discoveredSvgFiles) {
         const opt = document.createElement("option");
         opt.value = file;
         opt.textContent = file;
         svgSelect.appendChild(opt);
       }
 
-      if (SVG_FILES.length) {
-        const firstSvg = await loadRepoSvg(SVG_FILES[0]);
-        await setCurrentSvg(firstSvg, `Repository file: ${SVG_FILES[0]}`);
+      if (discoveredSvgFiles.length) {
+        const firstSvg = await loadRepoSvg(discoveredSvgFiles[0]);
+        await setCurrentSvg(firstSvg, `Repository file: ${discoveredSvgFiles[0]}`);
       }
 
-      log(`Loaded ${SVG_FILES.length} SVG files from built-in list`);
+      log(`Loaded ${discoveredSvgFiles.length} SVG files from svgs directory`);
     }
 
     svgSelect.addEventListener("change", async () => {
