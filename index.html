@@ -1,0 +1,524 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SVG to Font Downloader</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg-1: #f2efe8;
+      --bg-2: #e7f2ef;
+      --ink: #112018;
+      --muted: #4c6057;
+      --card: rgba(255, 255, 255, 0.78);
+      --line: rgba(17, 32, 24, 0.16);
+      --accent: #1f7a57;
+      --accent-2: #cf5f2f;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Space Grotesk", sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(1100px 700px at 12% -8%, rgba(207, 95, 47, 0.18), transparent 60%),
+        radial-gradient(1000px 700px at 88% 108%, rgba(31, 122, 87, 0.24), transparent 62%),
+        linear-gradient(130deg, var(--bg-1), var(--bg-2));
+      display: grid;
+      place-items: center;
+      padding: 28px;
+    }
+
+    .panel {
+      width: min(920px, 100%);
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      backdrop-filter: blur(8px);
+      box-shadow: 0 20px 60px rgba(17, 32, 24, 0.1);
+      overflow: hidden;
+      animation: rise 420ms ease-out;
+    }
+
+    .header {
+      padding: 28px 28px 10px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(1.6rem, 2vw + 1rem, 2.4rem);
+      letter-spacing: -0.03em;
+    }
+
+    .subtitle {
+      margin: 10px 0 0;
+      color: var(--muted);
+      line-height: 1.45;
+    }
+
+    .grid {
+      display: grid;
+      gap: 18px;
+      grid-template-columns: 1fr 1fr;
+      padding: 20px 28px 28px;
+    }
+
+    .field {
+      display: grid;
+      gap: 8px;
+    }
+
+    label {
+      font-weight: 600;
+      font-size: 0.95rem;
+    }
+
+    input,
+    select,
+    button,
+    textarea {
+      font: inherit;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      background: #fff;
+      padding: 11px 12px;
+      color: var(--ink);
+    }
+
+    input:focus,
+    select:focus,
+    button:focus,
+    textarea:focus {
+      outline: 2px solid color-mix(in srgb, var(--accent) 38%, white);
+      outline-offset: 1px;
+    }
+
+    .actions {
+      grid-column: 1 / -1;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    button {
+      border: 0;
+      background: linear-gradient(135deg, var(--accent), #14563d);
+      color: #fff;
+      font-weight: 700;
+      cursor: pointer;
+      transition: transform 160ms ease, filter 160ms ease;
+    }
+
+    button:hover { filter: brightness(1.04); }
+    button:active { transform: translateY(1px); }
+    button[disabled] { opacity: 0.6; cursor: not-allowed; }
+
+    .secondary {
+      background: linear-gradient(135deg, var(--accent-2), #9b4320);
+    }
+
+    .preview {
+      border: 1px dashed var(--line);
+      border-radius: 14px;
+      padding: 14px;
+      min-height: 180px;
+      display: grid;
+      place-items: center;
+      background: rgba(255, 255, 255, 0.6);
+    }
+
+    .preview svg,
+    .preview img {
+      max-width: 180px;
+      max-height: 180px;
+      width: auto;
+      height: auto;
+    }
+
+    .log {
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 0.83rem;
+      white-space: pre-wrap;
+      min-height: 88px;
+      background: rgba(17, 32, 24, 0.04);
+    }
+
+    .full {
+      grid-column: 1 / -1;
+    }
+
+    @keyframes rise {
+      from { opacity: 0; transform: translateY(16px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    @media (max-width: 760px) {
+      .grid { grid-template-columns: 1fr; padding: 16px; }
+      .header { padding: 20px 16px 6px; }
+      .preview { min-height: 130px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="panel">
+    <div class="header">
+      <h1>SVG to TTF / WOFF / WOFF2</h1>
+      <p class="subtitle">Select an SVG from this repository, or upload your own file. Conversion runs in your browser and files download directly, with no build step.</p>
+    </div>
+
+    <div class="grid">
+      <div class="field">
+        <label for="svgSelect">SVG from repository</label>
+        <select id="svgSelect"></select>
+      </div>
+
+      <div class="field">
+        <label for="localSvg">Or upload local SVG</label>
+        <input id="localSvg" type="file" accept=".svg,image/svg+xml" />
+      </div>
+
+      <div class="field">
+        <label for="fontName">Font name</label>
+        <input id="fontName" value="my-icons" />
+      </div>
+
+      <div class="field">
+        <label for="glyphName">Glyph name</label>
+        <input id="glyphName" value="icon" />
+      </div>
+
+      <div class="field full">
+        <label>Preview</label>
+        <div id="preview" class="preview">No SVG selected yet</div>
+      </div>
+
+      <div class="actions">
+        <button id="downloadBtn">Download TTF / WOFF / WOFF2</button>
+        <button id="refreshBtn" class="secondary" type="button">Reload selected SVG</button>
+      </div>
+
+      <div class="field full">
+        <label for="log">Status</label>
+        <textarea id="log" class="log" readonly></textarea>
+      </div>
+    </div>
+  </main>
+
+  <script type="module">
+    import svg2ttf from "https://esm.sh/svg2ttf@6.0.3";
+    import ttf2woff from "https://esm.sh/ttf2woff@3.0.0";
+    import ttf2woff2 from "https://esm.sh/ttf2woff2@8.0.1";
+    import svgpath from "https://esm.sh/svgpath@2.6.0";
+
+    const SVG_FILES = [
+      "blog.svg",
+      "book.svg",
+      "books.svg",
+      "bullhorn.svg",
+      "camera.svg",
+      "clubs.svg",
+      "connection.svg",
+      "diamonds.svg",
+      "dice.svg",
+      "droplet.svg",
+      "eyedropper.svg",
+      "feed.svg",
+      "film.svg",
+      "headphones.svg",
+      "home.svg",
+      "home2.svg",
+      "home3.svg",
+      "image.svg",
+      "images.svg",
+      "library.svg",
+      "mic.svg",
+      "music.svg",
+      "newspaper.svg",
+      "office.svg",
+      "pacman.svg",
+      "paint-format.svg",
+      "pen.svg",
+      "pencil.svg",
+      "pencil2.svg",
+      "play.svg",
+      "podcast.svg",
+      "quill.svg",
+      "spades.svg",
+      "video-camera.svg"
+    ];
+
+    const svgSelect = document.getElementById("svgSelect");
+    const localSvgInput = document.getElementById("localSvg");
+    const fontNameInput = document.getElementById("fontName");
+    const glyphNameInput = document.getElementById("glyphName");
+    const downloadBtn = document.getElementById("downloadBtn");
+    const refreshBtn = document.getElementById("refreshBtn");
+    const preview = document.getElementById("preview");
+    const logArea = document.getElementById("log");
+
+    const UNITS_PER_EM = 1024;
+    const UNICODE = "E001";
+
+    let currentSvgText = "";
+    let currentSvgSource = "";
+
+    function log(message) {
+      logArea.value += `${message}\n`;
+      logArea.scrollTop = logArea.scrollHeight;
+    }
+
+    function resetLog() {
+      logArea.value = "";
+    }
+
+    function downloadBlob(filename, blob) {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    }
+
+    async function loadRepoSvg(fileName) {
+      const response = await fetch(`./svgs/${fileName}`, { cache: "no-store" });
+      if (!response.ok) {
+        throw new Error(`Could not load ${fileName}`);
+      }
+      return response.text();
+    }
+
+    function sanitizeName(value, fallback) {
+      const out = (value || "")
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9-_]+/g, "-")
+        .replace(/^-+|-+$/g, "");
+      return out || fallback;
+    }
+
+    function parseViewBox(svgRoot) {
+      const vb = (svgRoot.getAttribute("viewBox") || "").trim();
+      if (vb) {
+        const numbers = vb.split(/\s+|,/).map(Number);
+        if (numbers.length === 4 && numbers.every((n) => Number.isFinite(n))) {
+          const [minX, minY, width, height] = numbers;
+          if (width > 0 && height > 0) {
+            return { minX, minY, width, height };
+          }
+        }
+      }
+
+      const width = Number(svgRoot.getAttribute("width"));
+      const height = Number(svgRoot.getAttribute("height"));
+      if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) {
+        return { minX: 0, minY: 0, width, height };
+      }
+
+      return { minX: 0, minY: 0, width: 1024, height: 1024 };
+    }
+
+    function extractPathData(svgText) {
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(svgText, "image/svg+xml");
+      const parserError = doc.querySelector("parsererror");
+      if (parserError) {
+        throw new Error("Invalid SVG file");
+      }
+
+      const svgRoot = doc.querySelector("svg");
+      if (!svgRoot) {
+        throw new Error("SVG root element not found");
+      }
+
+      const viewBox = parseViewBox(svgRoot);
+      const pathElements = Array.from(svgRoot.querySelectorAll("path"));
+      if (!pathElements.length) {
+        throw new Error("No <path> elements found. This page currently supports path-based SVG icons.");
+      }
+
+      const sx = UNITS_PER_EM / viewBox.width;
+      const sy = UNITS_PER_EM / viewBox.height;
+      const matrixA = sx;
+      const matrixB = 0;
+      const matrixC = 0;
+      const matrixD = -sy;
+      const matrixE = -viewBox.minX * sx;
+      const matrixF = UNITS_PER_EM + viewBox.minY * sy;
+
+      const transformedPaths = pathElements
+        .map((el) => (el.getAttribute("d") || "").trim())
+        .filter(Boolean)
+        .map((d) =>
+          svgpath(d)
+            .abs()
+            .matrix(matrixA, matrixB, matrixC, matrixD, matrixE, matrixF)
+            .round(4)
+            .toString()
+        );
+
+      if (!transformedPaths.length) {
+        throw new Error("No valid path data found in SVG");
+      }
+
+      return transformedPaths.join(" ");
+    }
+
+    function buildSvgFont({ fontName, glyphName, pathData }) {
+      return `<?xml version="1.0" standalone="no"?>
+<svg xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <font id="${fontName}" horiz-adv-x="${UNITS_PER_EM}">
+      <font-face
+        font-family="${fontName}"
+        units-per-em="${UNITS_PER_EM}"
+        ascent="${UNITS_PER_EM}"
+        descent="0"
+      />
+      <missing-glyph horiz-adv-x="0" />
+      <glyph glyph-name="${glyphName}" unicode="&#x${UNICODE};" d="${pathData}" />
+    </font>
+  </defs>
+</svg>`;
+    }
+
+    function renderPreview(svgText, sourceLabel) {
+      preview.innerHTML = "";
+      const wrap = document.createElement("div");
+      wrap.style.display = "grid";
+      wrap.style.gap = "10px";
+      wrap.style.justifyItems = "center";
+
+      const info = document.createElement("div");
+      info.textContent = sourceLabel;
+      info.style.fontSize = "0.85rem";
+      info.style.opacity = "0.75";
+
+      const img = document.createElement("img");
+      img.alt = sourceLabel;
+      img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svgText)}`;
+
+      wrap.appendChild(img);
+      wrap.appendChild(info);
+      preview.appendChild(wrap);
+    }
+
+    async function setCurrentSvg(svgText, sourceLabel) {
+      currentSvgText = svgText;
+      currentSvgSource = sourceLabel;
+      renderPreview(svgText, sourceLabel);
+    }
+
+    async function convertAndDownload() {
+      if (!currentSvgText) {
+        throw new Error("Pick an SVG first");
+      }
+
+      const fontName = sanitizeName(fontNameInput.value, "my-icons");
+      const glyphName = sanitizeName(glyphNameInput.value, "icon");
+
+      log(`Using font name: ${fontName}`);
+      log(`Using glyph name: ${glyphName}`);
+      log(`Source: ${currentSvgSource}`);
+
+      const pathData = extractPathData(currentSvgText);
+      const svgFont = buildSvgFont({ fontName, glyphName, pathData });
+
+      const ttf = svg2ttf(svgFont, {});
+      const ttfBytes = new Uint8Array(ttf.buffer);
+
+      const woff = ttf2woff(ttfBytes);
+      const woff2 = ttf2woff2(ttfBytes);
+
+      downloadBlob(`${fontName}.ttf`, new Blob([ttfBytes], { type: "font/ttf" }));
+      downloadBlob(`${fontName}.woff`, new Blob([new Uint8Array(woff.buffer)], { type: "font/woff" }));
+      downloadBlob(`${fontName}.woff2`, new Blob([new Uint8Array(woff2)], { type: "font/woff2" }));
+
+      log("Downloaded: TTF, WOFF, WOFF2");
+    }
+
+    async function onSelectChange() {
+      const selected = svgSelect.value;
+      if (!selected) {
+        return;
+      }
+      const svgText = await loadRepoSvg(selected);
+      await setCurrentSvg(svgText, `Repository file: ${selected}`);
+    }
+
+    async function init() {
+      resetLog();
+      log("Initializing single-file app...");
+
+      svgSelect.innerHTML = "";
+      for (const file of SVG_FILES) {
+        const opt = document.createElement("option");
+        opt.value = file;
+        opt.textContent = file;
+        svgSelect.appendChild(opt);
+      }
+
+      if (SVG_FILES.length) {
+        const firstSvg = await loadRepoSvg(SVG_FILES[0]);
+        await setCurrentSvg(firstSvg, `Repository file: ${SVG_FILES[0]}`);
+      }
+
+      log(`Loaded ${SVG_FILES.length} SVG files from built-in list`);
+    }
+
+    svgSelect.addEventListener("change", async () => {
+      try {
+        await onSelectChange();
+      } catch (error) {
+        log(`Error: ${error.message}`);
+      }
+    });
+
+    localSvgInput.addEventListener("change", async () => {
+      const file = localSvgInput.files && localSvgInput.files[0];
+      if (!file) {
+        return;
+      }
+      try {
+        const text = await file.text();
+        await setCurrentSvg(text, `Uploaded file: ${file.name}`);
+        log(`Loaded local file: ${file.name}`);
+      } catch (error) {
+        log(`Error: ${error.message}`);
+      }
+    });
+
+    downloadBtn.addEventListener("click", async () => {
+      try {
+        downloadBtn.disabled = true;
+        await convertAndDownload();
+      } catch (error) {
+        log(`Error: ${error.message}`);
+      } finally {
+        downloadBtn.disabled = false;
+      }
+    });
+
+    refreshBtn.addEventListener("click", async () => {
+      try {
+        await onSelectChange();
+      } catch (error) {
+        log(`Error: ${error.message}`);
+      }
+    });
+
+    init().catch((error) => {
+      log(`Error: ${error.message}`);
+    });
+  </script>
+</body>
+</html>
