@@ -829,6 +829,18 @@
         downloadBtn.disabled = true;
         await convertAndDownload();
       } catch (error) {
+        if ((error && error.message && error.message.includes("readUint16BE"))) {
+          log("Warning: WOFF converter runtime is incompatible here, retrying with TTF-only mode");
+          woffAvailable = false;
+          woff2Available = false;
+          try {
+            await convertAndDownload();
+            return;
+          } catch (retryError) {
+            log(`Error: ${retryError.message}`);
+            return;
+          }
+        }
         log(`Error: ${error.message}`);
       } finally {
         downloadBtn.disabled = false;
