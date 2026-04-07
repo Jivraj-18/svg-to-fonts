@@ -399,6 +399,21 @@
         return;
       }
 
+      const resolveFn = (mod, named) => {
+        const candidates = [
+          mod,
+          mod && mod.default,
+          mod && mod[named],
+          mod && mod.default && mod.default.default,
+          mod && mod.default && mod.default[named]
+        ];
+        const fn = candidates.find((item) => typeof item === "function");
+        if (!fn) {
+          throw new Error(`Failed to load converter function: ${named}`);
+        }
+        return fn;
+      };
+
       log("Loading converter libraries...");
       const [svg2ttfMod, ttf2woffMod, ttf2woff2Mod, svgpathMod] = await Promise.all([
         import("https://esm.sh/svg2ttf@6.0.3"),
@@ -407,10 +422,10 @@
         import("https://esm.sh/svgpath@2.6.0")
       ]);
 
-      svg2ttfLib = svg2ttfMod.default;
-      ttf2woffLib = ttf2woffMod.default;
-      ttf2woff2Lib = ttf2woff2Mod.default;
-      svgpathLib = svgpathMod.default;
+      svg2ttfLib = resolveFn(svg2ttfMod, "svg2ttf");
+      ttf2woffLib = resolveFn(ttf2woffMod, "ttf2woff");
+      ttf2woff2Lib = resolveFn(ttf2woff2Mod, "ttf2woff2");
+      svgpathLib = resolveFn(svgpathMod, "svgpath");
 
       log("Converter libraries loaded");
     }
