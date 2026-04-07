@@ -715,17 +715,36 @@
       const ttf = svg2ttfLib(svgFont, {});
       const ttfBytes = new Uint8Array(ttf.buffer);
 
+      // Always provide TTF even if optional converters fail.
       downloadBlob(`${fontName}.ttf`, new Blob([ttfBytes], { type: "font/ttf" }));
+
+      let woffDownloaded = false;
       if (woffAvailable && typeof ttf2woffLib === "function") {
-        const woff = ttf2woffLib(ttfBytes);
-        downloadBlob(`${fontName}.woff`, new Blob([new Uint8Array(woff.buffer)], { type: "font/woff" }));
+        try {
+          const woff = ttf2woffLib(ttfBytes);
+          downloadBlob(`${fontName}.woff`, new Blob([new Uint8Array(woff.buffer)], { type: "font/woff" }));
+          woffDownloaded = true;
+        } catch (error) {
+          woffAvailable = false;
+          log(`Warning: WOFF conversion failed (${error.message})`);
+        }
       }
 
-      if (woffAvailable && woff2Available && typeof ttf2woff2Lib === "function") {
-        const woff2 = ttf2woff2Lib(ttfBytes);
-        downloadBlob(`${fontName}.woff2`, new Blob([new Uint8Array(woff2)], { type: "font/woff2" }));
+      let woff2Downloaded = false;
+      if (woff2Available && typeof ttf2woff2Lib === "function") {
+        try {
+          const woff2 = ttf2woff2Lib(ttfBytes);
+          downloadBlob(`${fontName}.woff2`, new Blob([new Uint8Array(woff2)], { type: "font/woff2" }));
+          woff2Downloaded = true;
+        } catch (error) {
+          woff2Available = false;
+          log(`Warning: WOFF2 conversion failed (${error.message})`);
+        }
+      }
+
+      if (woffDownloaded && woff2Downloaded) {
         log("Downloaded: TTF, WOFF, WOFF2");
-      } else if (woffAvailable) {
+      } else if (woffDownloaded) {
         log("Downloaded: TTF, WOFF (WOFF2 unavailable in this browser/runtime)");
       } else {
         log("Downloaded: TTF (WOFF/WOFF2 unavailable in this browser/runtime)");
