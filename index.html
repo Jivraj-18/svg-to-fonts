@@ -327,6 +327,7 @@
     let svg2ttfLib;
     let ttf2woffLib;
     let ttf2woff2Lib;
+    let woff2Available = true;
     let svgpathLib;
 
     function log(message) {
@@ -400,7 +401,7 @@
     }
 
     async function ensureConverterLibs() {
-      if (svg2ttfLib && ttf2woffLib && ttf2woff2Lib) {
+      if (svg2ttfLib && ttf2woffLib && (!woff2Available || ttf2woff2Lib)) {
         return;
       }
 
@@ -431,16 +432,28 @@
       };
 
       log("Loading converter libraries...");
-      const [svg2ttfMod, ttf2woffMod, ttf2woff2Mod, svgpathMod] = await Promise.all([
-        import("https://esm.sh/svg2ttf@6.0.3"),
-        import("https://esm.sh/ttf2woff@3.0.0"),
-        import("https://esm.sh/ttf2woff2@8.0.1"),
-        import("https://esm.sh/svgpath@2.6.0")
+      const [svg2ttfMod, ttf2woffMod, ttf2woff2Result, svgpathMod] = await Promise.all([
+        import("https://esm.sh/svg2ttf@6.0.3?bundle&conditions=browser"),
+        import("https://esm.sh/ttf2woff@3.0.0?bundle&conditions=browser"),
+        import("https://esm.sh/ttf2woff2@8.0.1?bundle&conditions=browser").catch((error) => ({ __loadError: error })),
+        import("https://esm.sh/svgpath@2.6.0?bundle&conditions=browser")
       ]);
 
       svg2ttfLib = resolveFn(svg2ttfMod, "svg2ttf");
       ttf2woffLib = resolveFn(ttf2woffMod, "ttf2woff");
-      ttf2woff2Lib = resolveFn(ttf2woff2Mod, "ttf2woff2");
+
+      if (ttf2woff2Result && ttf2woff2Result.__loadError) {
+        woff2Available = false;
+        ttf2woff2Lib = null;
+        log(`Warning: WOFF2 converter unavailable (${ttf2woff2Result.__loadError.message})`);
+      } else {
+        ttf2woff2Lib = resolveOptionalFn(ttf2woff2Result, "ttf2woff2");
+        if (!ttf2woff2Lib) {
+          woff2Available = false;
+          log("Warning: WOFF2 converter unavailable, continuing with TTF/WOFF only");
+        }
+      }
+
       svgpathLib = resolveOptionalFn(svgpathMod, "svgpath");
 
       log("Converter libraries loaded");
@@ -660,13 +673,16 @@
       const ttfBytes = new Uint8Array(ttf.buffer);
 
       const woff = ttf2woffLib(ttfBytes);
-      const woff2 = ttf2woff2Lib(ttfBytes);
-
       downloadBlob(`${fontName}.ttf`, new Blob([ttfBytes], { type: "font/ttf" }));
       downloadBlob(`${fontName}.woff`, new Blob([new Uint8Array(woff.buffer)], { type: "font/woff" }));
-      downloadBlob(`${fontName}.woff2`, new Blob([new Uint8Array(woff2)], { type: "font/woff2" }));
 
-      log("Downloaded: TTF, WOFF, WOFF2");
+      if (woff2Available && typeof ttf2woff2Lib === "function") {
+        const woff2 = ttf2woff2Lib(ttfBytes);
+        downloadBlob(`${fontName}.woff2`, new Blob([new Uint8Array(woff2)], { type: "font/woff2" }));
+        log("Downloaded: TTF, WOFF, WOFF2");
+      } else {
+        log("Downloaded: TTF, WOFF (WOFF2 unavailable in this browser/runtime)");
+      }
     }
 
     async function onSelectChange() {
