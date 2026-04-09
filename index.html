@@ -199,6 +199,43 @@
       word-break: break-word;
     }
 
+    .glyph-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px;
+      padding: 8px 0;
+    }
+
+    .glyph-cell {
+      display: grid;
+      gap: 6px;
+      justify-items: center;
+      background: rgba(255,255,255,0.7);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 12px 16px;
+      min-width: 80px;
+    }
+
+    .glyph-char {
+      font-size: 48px;
+      line-height: 1;
+    }
+
+    .glyph-label {
+      font-size: 0.72rem;
+      color: var(--muted);
+      font-family: "IBM Plex Mono", monospace;
+      text-align: center;
+    }
+
+    .section-title {
+      font-weight: 600;
+      font-size: 0.92rem;
+      margin: 0 0 6px;
+      color: var(--muted);
+    }
+
     @keyframes rise {
       from { opacity: 0; transform: translateY(16px); }
       to { opacity: 1; transform: translateY(0); }
@@ -286,6 +323,12 @@
         </div>
       </div>
 
+      <div class="field full" id="viewerGlyphSection" style="display:none">
+        <label>Icon glyphs (PUA codepoints)</label>
+        <div id="viewerGlyphGrid" class="glyph-grid"></div>
+        <p style="font-size:0.82rem;color:var(--muted);margin:4px 0 0">These are the actual icon characters embedded in the font at Private Use Area codepoints (U+E001…).</p>
+      </div>
+
       <div class="field full">
         <label for="viewerLog">Viewer status</label>
         <textarea id="viewerLog" class="log" readonly></textarea>
@@ -315,7 +358,8 @@
     const viewerLogArea = document.getElementById("viewerLog");
 
     const UNITS_PER_EM = 1024;
-    const UNICODE = "E001";
+    const UNICODE_START = 0xE001; // first PUA codepoint
+    const UNICODE = "E001";       // kept for single-glyph builds
 
     let currentSvgText = "";
     let currentSvgSource = "";
@@ -401,10 +445,83 @@
       return files;
     }
 
-    async function ensureConverterLibs() {
-      if (svg2ttfLib && (!woffAvailable || ttf2woffLib) && (!woff2Available || ttf2woff2Lib)) {
-        return;
+    // ---------------------------------------------------------------------------
+    // Pure-JS TTF → WOFF converter (no Node.js required)
+    // WOFF is simply a TTF wrapped with a 44-byte header + optional metadata.
+    // See: https://www.w3.org/TR/WOFF/
+    // ---------------------------------------------------------------------------
+    function ttfToWoffPureJS(ttfBytes) {
+      const sfntVersion = (ttfBytes[0] << 24 | ttfBytes[1] << 16 | ttfBytes[2] << 8 | ttfBytes[3]) >>> 0;
+      const numTables  = (ttfBytes[4] << 8  | ttfBytes[5]) >>> 0;
+
+      // Parse table directory from the TTF (offset 12, each record = 16 bytes)
+      const tables = [];
+      for (let i = 0; i < numTables; i++) {
+        const off = 12 + i * 16;
+        const tag    = String.fromCharCode(ttfBytes[off], ttfBytes[off+1], ttfBytes[off+2], ttfBytes[off+3]);
+        const checkSum = (ttfBytes[off+4]<<24 | ttfBytes[off+5]<<16 | ttfBytes[off+6]<<8 | ttfBytes[off+7]) >>> 0;
+        const offset  = (ttfBytes[off+8]<<24 | ttfBytes[off+9]<<16 | ttfBytes[off+10]<<8| ttfBytes[off+11]) >>> 0;
+        const length  = (ttfBytes[off+12]<<24| ttfBytes[off+13]<<16| ttfBytes[off+14]<<8| ttfBytes[off+15]) >>> 0;
+        tables.push({ tag, checkSum, offset, length });
       }
+
+      // WOFF header is 44 bytes; table directory is numTables * 20 bytes
+      const woffHeaderSize = 44 + numTables * 20;
+      // Each table block must be padded to a 4-byte boundary
+      const pad4 = (n) => (n + 3) & ~3;
+
+      // Calculate sizes
+      let totalFontDataSize = 0;
+      const tableInfos = tables.map((t) => {
+        const compOffset = woffHeaderSize + totalFontDataSize;
+        const paddedLen  = pad4(t.length);
+        totalFontDataSize += paddedLen;
+        return { ...t, compOffset, compLength: t.length }; // store uncompressed (no zlib)
+      });
+
+      const woffSize = woffHeaderSize + totalFontDataSize;
+      const woff = new Uint8Array(woffSize);
+      const dv   = new DataView(woff.buffer);
+
+      // WOFF signature
+      dv.setUint32(0,  0x774F4646); // 'wOFF'
+      dv.setUint32(4,  sfntVersion);
+      dv.setUint32(8,  woffSize);
+      dv.setUint16(12, numTables);
+      dv.setUint16(14, 0);          // reserved
+      dv.setUint32(16, ttfBytes.length); // totalSfntSize
+      dv.setUint16(20, 1);          // majorVersion
+      dv.setUint16(22, 0);          // minorVersion
+      dv.setUint32(24, 0);          // metaOffset  (none)
+      dv.setUint32(28, 0);          // metaLength
+      dv.setUint32(32, 0);          // metaOrigLength
+      dv.setUint32(36, 0);          // privOffset  (none)
+      dv.setUint32(40, 0);          // privLength
+
+      // Table directory (starts at offset 44)
+      tableInfos.forEach((t, i) => {
+        const base = 44 + i * 20;
+        woff[base]   = t.tag.charCodeAt(0);
+        woff[base+1] = t.tag.charCodeAt(1);
+        woff[base+2] = t.tag.charCodeAt(2);
+        woff[base+3] = t.tag.charCodeAt(3);
+        dv.setUint32(base + 4,  t.compOffset);  // offset in WOFF file
+        dv.setUint32(base + 8,  t.compLength);  // compressed length (= original, no compression)
+        dv.setUint32(base + 12, t.length);      // original length
+        dv.setUint32(base + 16, t.checkSum);
+      });
+
+      // Copy table data
+      tableInfos.forEach((t) => {
+        const slice = ttfBytes.subarray(t.offset, t.offset + t.length);
+        woff.set(slice, t.compOffset);
+      });
+
+      return woff;
+    }
+
+    async function ensureConverterLibs() {
+      if (svg2ttfLib) return;
 
       const resolveFn = (mod, named) => {
         const candidates = [
@@ -415,9 +532,7 @@
           mod && mod.default && mod.default[named]
         ];
         const fn = candidates.find((item) => typeof item === "function");
-        if (!fn) {
-          throw new Error(`Failed to load converter function: ${named}`);
-        }
+        if (!fn) throw new Error(`Failed to load converter function: ${named}`);
         return fn;
       };
 
@@ -435,51 +550,35 @@
       const importFromAny = async (urls) => {
         let lastError = null;
         for (const url of urls) {
-          try {
-            return await import(url);
-          } catch (error) {
-            lastError = error;
-          }
+          try { return await import(url); } catch (e) { lastError = e; }
         }
         throw lastError || new Error("Failed to import module from all sources");
       };
 
       log("Loading converter libraries...");
-      const [svg2ttfMod, ttf2woffResult, ttf2woff2Result, svgpathResult] = await Promise.all([
+      const [svg2ttfMod, ttf2woff2Result, svgpathResult] = await Promise.all([
         importFromAny([
           "https://esm.sh/svg2ttf@6.0.3?bundle&conditions=browser",
           "https://cdn.jsdelivr.net/npm/svg2ttf@6.0.3/+esm",
           "https://unpkg.com/svg2ttf@6.0.3/index.js?module"
         ]),
         importFromAny([
-          "https://esm.sh/ttf2woff@3.0.0?bundle&conditions=browser",
-          "https://cdn.jsdelivr.net/npm/ttf2woff@3.0.0/+esm",
-          "https://unpkg.com/ttf2woff@3.0.0/index.js?module"
-        ]).catch((error) => ({ __loadError: error })),
-        importFromAny([
           "https://esm.sh/ttf2woff2@8.0.1?bundle&conditions=browser",
           "https://cdn.jsdelivr.net/npm/ttf2woff2@8.0.1/+esm"
-        ]).catch((error) => ({ __loadError: error })),
+        ]).catch((e) => ({ __loadError: e })),
         importFromAny([
           "https://esm.sh/svgpath@2.6.0?bundle&conditions=browser",
           "https://cdn.jsdelivr.net/npm/svgpath@2.6.0/+esm",
           "https://unpkg.com/svgpath@2.6.0/index.js?module"
-        ]).catch((error) => ({ __loadError: error }))
+        ]).catch((e) => ({ __loadError: e }))
       ]);
 
       svg2ttfLib = resolveFn(svg2ttfMod, "svg2ttf");
 
-      if (ttf2woffResult && ttf2woffResult.__loadError) {
-        woffAvailable = false;
-        ttf2woffLib = null;
-        log(`Warning: WOFF converter unavailable (${ttf2woffResult.__loadError.message})`);
-      } else {
-        ttf2woffLib = resolveOptionalFn(ttf2woffResult, "ttf2woff");
-        if (!ttf2woffLib) {
-          woffAvailable = false;
-          log("Warning: WOFF converter unavailable, continuing with TTF only");
-        }
-      }
+      // WOFF uses our pure-JS converter — always available
+      woffAvailable = true;
+      ttf2woffLib = ttfToWoffPureJS;
+      log("WOFF converter: using built-in pure-JS converter");
 
       if (ttf2woff2Result && ttf2woff2Result.__loadError) {
         woff2Available = false;
@@ -578,6 +677,9 @@
       fontPreviewLabel.textContent = `Loaded: ${file.name}`;
       viewerLog(`Loaded font: ${file.name} (${format})`);
       updateFontPreviewText();
+
+      // Show glyph preview tiles for PUA codepoints
+      showViewerGlyphPreview(uploadedFontFamily);
     }
 
     function parseViewBox(svgRoot) {
@@ -695,6 +797,78 @@
       renderPreview(svgText, sourceLabel);
     }
 
+    // ---- Glyph preview helpers ------------------------------------------------
+
+    let converterPreviewFontFamily = "";
+    let converterPreviewFontUrl = "";
+
+    function showConverterGlyphPreview(fontName, ttfBytes) {
+      // Revoke old object URL
+      if (converterPreviewFontUrl) URL.revokeObjectURL(converterPreviewFontUrl);
+
+      converterPreviewFontUrl = URL.createObjectURL(
+        new Blob([ttfBytes], { type: "font/ttf" })
+      );
+      converterPreviewFontFamily = `preview-${fontName}-${Date.now()}`;
+
+      let styleTag = document.getElementById("converterPreviewFontStyle");
+      if (!styleTag) {
+        styleTag = document.createElement("style");
+        styleTag.id = "converterPreviewFontStyle";
+        document.head.appendChild(styleTag);
+      }
+      styleTag.textContent = `@font-face { font-family: '${converterPreviewFontFamily}'; src: url('${converterPreviewFontUrl}') format('truetype'); }`;
+
+      // Build glyph grid in the log area section
+      let glyphSection = document.getElementById("converterGlyphSection");
+      if (!glyphSection) {
+        glyphSection = document.createElement("div");
+        glyphSection.id = "converterGlyphSection";
+        glyphSection.className = "field full";
+        glyphSection.innerHTML = `<label>Icon glyph preview</label><div id="converterGlyphGrid" class="glyph-grid"></div><p style="font-size:0.82rem;color:var(--muted);margin:4px 0 0">The icon is embedded at the PUA codepoint U+E001. Add it to your HTML as <code>&amp;#xE001;</code>.</p>`;
+        // Insert before the log field
+        const logField = document.querySelector("#converterView .field.full:last-of-type");
+        logField.parentNode.insertBefore(glyphSection, logField);
+      }
+
+      const grid = document.getElementById("converterGlyphGrid");
+      grid.innerHTML = "";
+      const cell = document.createElement("div");
+      cell.className = "glyph-cell";
+      const charSpan = document.createElement("span");
+      charSpan.className = "glyph-char";
+      charSpan.style.fontFamily = `'${converterPreviewFontFamily}'`;
+      charSpan.textContent = String.fromCodePoint(UNICODE_START);
+      const labelSpan = document.createElement("span");
+      labelSpan.className = "glyph-label";
+      labelSpan.textContent = `U+E001`;
+      cell.appendChild(charSpan);
+      cell.appendChild(labelSpan);
+      grid.appendChild(cell);
+    }
+
+    function showViewerGlyphPreview(fontFamily) {
+      const section = document.getElementById("viewerGlyphSection");
+      const grid    = document.getElementById("viewerGlyphGrid");
+      section.style.display = "";
+      grid.innerHTML = "";
+      // Render PUA range U+E001–U+E020 to check which are populated
+      for (let cp = 0xE001; cp <= 0xE020; cp++) {
+        const cell = document.createElement("div");
+        cell.className = "glyph-cell";
+        const charSpan = document.createElement("span");
+        charSpan.className = "glyph-char";
+        charSpan.style.fontFamily = `'${fontFamily}', monospace`;
+        charSpan.textContent = String.fromCodePoint(cp);
+        const labelSpan = document.createElement("span");
+        labelSpan.className = "glyph-label";
+        labelSpan.textContent = `U+${cp.toString(16).toUpperCase()}`;
+        cell.appendChild(charSpan);
+        cell.appendChild(labelSpan);
+        grid.appendChild(cell);
+      }
+    }
+
     async function convertAndDownload() {
       if (!currentSvgText) {
         throw new Error("Pick an SVG first");
@@ -715,14 +889,16 @@
       const ttf = svg2ttfLib(svgFont, {});
       const ttfBytes = new Uint8Array(ttf.buffer);
 
-      // Always provide TTF even if optional converters fail.
+      // Always provide TTF
       downloadBlob(`${fontName}.ttf`, new Blob([ttfBytes], { type: "font/ttf" }));
 
       let woffDownloaded = false;
       if (woffAvailable && typeof ttf2woffLib === "function") {
         try {
           const woff = ttf2woffLib(ttfBytes);
-          downloadBlob(`${fontName}.woff`, new Blob([new Uint8Array(woff.buffer)], { type: "font/woff" }));
+          // ttfToWoffPureJS returns Uint8Array; external lib may return ArrayBuffer
+          const woffBytes = woff instanceof Uint8Array ? woff : new Uint8Array(woff.buffer || woff);
+          downloadBlob(`${fontName}.woff`, new Blob([woffBytes], { type: "font/woff" }));
           woffDownloaded = true;
         } catch (error) {
           woffAvailable = false;
@@ -742,13 +918,18 @@
         }
       }
 
-      if (woffDownloaded && woff2Downloaded) {
-        log("Downloaded: TTF, WOFF, WOFF2");
-      } else if (woffDownloaded) {
-        log("Downloaded: TTF, WOFF (WOFF2 unavailable in this browser/runtime)");
-      } else {
-        log("Downloaded: TTF (WOFF/WOFF2 unavailable in this browser/runtime)");
-      }
+      const downloaded = ["TTF"];
+      if (woffDownloaded)  downloaded.push("WOFF");
+      if (woff2Downloaded) downloaded.push("WOFF2");
+      log(`Downloaded: ${downloaded.join(", ")}`);
+
+      // Show CSS usage snippet
+      log(`\nCSS usage:\n  @font-face { font-family: '${fontName}'; src: url('${fontName}.woff2') format('woff2'), url('${fontName}.woff') format('woff'), url('${fontName}.ttf') format('truetype'); }`);
+      log(`  .icon-${glyphName} { font-family: '${fontName}'; }`);
+      log(`  HTML char: <i class="icon-${glyphName}">&#xE001;</i> (U+E001)`);
+
+      // Show icon preview in converter using a temporary @font-face
+      showConverterGlyphPreview(fontName, ttfBytes);
     }
 
     async function onSelectChange() {
