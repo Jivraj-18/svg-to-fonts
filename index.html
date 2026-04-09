@@ -373,7 +373,6 @@
     let ttf2woff2Lib;
     let woffAvailable = true;
     let woff2Available = true;
-    let svgpathLib;
 
     function log(message) {
       logArea.value += `${message}\n`;
@@ -443,6 +442,113 @@
       }
 
       return files;
+    }
+
+    // ---------------------------------------------------------------------------
+    // Built-in SVG path transformer — no external library needed.
+    // Converts all SVG path commands to absolute form and applies a 2D matrix.
+    // matrix: x' = ma*x + mc*y + me,  y' = mb*x + md*y + mf
+    // ---------------------------------------------------------------------------
+    function transformSvgPath(d, ma, mb, mc, md, me, mf) {
+      const tp = (x, y) => [ma * x + mc * y + me, mb * x + md * y + mf];
+
+      // Tokenize: extract command letters and numeric values
+      const tokens = [];
+      const re = /([MLHVCSQTAZmlhvcsqtaz])|([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)/g;
+      let tok;
+      while ((tok = re.exec(d)) !== null) tokens.push(tok[1] || parseFloat(tok[2]));
+
+      let i = 0, cx = 0, cy = 0, sx = 0, sy = 0;
+      let prevCmd = 'M';
+      const out = [];
+
+      const num = () => tokens[i++];
+      const ax = (rel) => { const v = num(); return rel ? cx + v : v; };
+      const ay = (rel) => { const v = num(); return rel ? cy + v : v; };
+      const fmt = (v) => +v.toFixed(4);
+
+      while (i < tokens.length) {
+        if (typeof tokens[i] === 'string') prevCmd = tokens[i++];
+        const cmd = prevCmd;
+        const upper = cmd.toUpperCase();
+        const rel = cmd !== upper;
+
+        switch (upper) {
+          case 'M': {
+            const x = ax(rel), y = ay(rel);
+            const [tx, ty] = tp(x, y);
+            out.push(`M${fmt(tx)} ${fmt(ty)}`);
+            cx = x; cy = y; sx = x; sy = y;
+            prevCmd = rel ? 'l' : 'L'; // implicit L after M
+            break;
+          }
+          case 'L': {
+            const x = ax(rel), y = ay(rel);
+            const [tx, ty] = tp(x, y);
+            out.push(`L${fmt(tx)} ${fmt(ty)}`);
+            cx = x; cy = y;
+            break;
+          }
+          case 'H': {
+            const v = num(), x = rel ? cx + v : v;
+            const [tx, ty] = tp(x, cy);
+            out.push(`L${fmt(tx)} ${fmt(ty)}`);
+            cx = x;
+            break;
+          }
+          case 'V': {
+            const v = num(), y = rel ? cy + v : v;
+            const [tx, ty] = tp(cx, y);
+            out.push(`L${fmt(tx)} ${fmt(ty)}`);
+            cy = y;
+            break;
+          }
+          case 'C': {
+            const x1=ax(rel),y1=ay(rel),x2=ax(rel),y2=ay(rel),x=ax(rel),y=ay(rel);
+            const [tx1,ty1]=tp(x1,y1),[tx2,ty2]=tp(x2,y2),[tx,ty]=tp(x,y);
+            out.push(`C${[tx1,ty1,tx2,ty2,tx,ty].map(fmt).join(' ')}`);
+            cx=x; cy=y;
+            break;
+          }
+          case 'S': {
+            const x2=ax(rel),y2=ay(rel),x=ax(rel),y=ay(rel);
+            const [tx2,ty2]=tp(x2,y2),[tx,ty]=tp(x,y);
+            out.push(`S${[tx2,ty2,tx,ty].map(fmt).join(' ')}`);
+            cx=x; cy=y;
+            break;
+          }
+          case 'Q': {
+            const x1=ax(rel),y1=ay(rel),x=ax(rel),y=ay(rel);
+            const [tx1,ty1]=tp(x1,y1),[tx,ty]=tp(x,y);
+            out.push(`Q${[tx1,ty1,tx,ty].map(fmt).join(' ')}`);
+            cx=x; cy=y;
+            break;
+          }
+          case 'T': {
+            const x=ax(rel),y=ay(rel),[tx,ty]=tp(x,y);
+            out.push(`T${fmt(tx)} ${fmt(ty)}`);
+            cx=x; cy=y;
+            break;
+          }
+          case 'A': {
+            const rx=num(),ry=num(),xRot=num(),large=num(),sweep=num(),x=ax(rel),y=ay(rel);
+            const [tx,ty]=tp(x,y);
+            const trx=Math.abs(rx*ma), try_=Math.abs(ry*md);
+            // Flip sweep direction when matrix flips an axis (det < 0)
+            const newSweep = (ma * md < 0) ? 1 - sweep : sweep;
+            out.push(`A${fmt(trx)} ${fmt(try_)} ${xRot} ${large} ${newSweep} ${fmt(tx)} ${fmt(ty)}`);
+            cx=x; cy=y;
+            break;
+          }
+          case 'Z': {
+            out.push('Z');
+            cx=sx; cy=sy;
+            break;
+          }
+          default: i++;
+        }
+      }
+      return out.join(' ');
     }
 
     // ---------------------------------------------------------------------------
@@ -556,7 +662,7 @@
       };
 
       log("Loading converter libraries...");
-      const [svg2ttfMod, ttf2woff2Result, svgpathResult] = await Promise.all([
+      const [svg2ttfMod, ttf2woff2Result] = await Promise.all([
         importFromAny([
           "https://esm.sh/svg2ttf@6.0.3?bundle&conditions=browser",
           "https://cdn.jsdelivr.net/npm/svg2ttf@6.0.3/+esm",
@@ -565,43 +671,30 @@
         importFromAny([
           "https://esm.sh/ttf2woff2@8.0.1?bundle&conditions=browser",
           "https://cdn.jsdelivr.net/npm/ttf2woff2@8.0.1/+esm"
-        ]).catch((e) => ({ __loadError: e })),
-        importFromAny([
-          "https://esm.sh/svgpath@2.6.0?bundle&conditions=browser",
-          "https://cdn.jsdelivr.net/npm/svgpath@2.6.0/+esm",
-          "https://unpkg.com/svgpath@2.6.0/index.js?module"
         ]).catch((e) => ({ __loadError: e }))
       ]);
 
       svg2ttfLib = resolveFn(svg2ttfMod, "svg2ttf");
 
-      // WOFF uses our pure-JS converter — always available
+      // WOFF: built-in pure-JS converter — always available, no CDN needed
       woffAvailable = true;
       ttf2woffLib = ttfToWoffPureJS;
-      log("WOFF converter: using built-in pure-JS converter");
+      log("Path transformer: built-in (no CDN dependency)");
+      log("WOFF converter: built-in pure-JS");
 
       if (ttf2woff2Result && ttf2woff2Result.__loadError) {
         woff2Available = false;
         ttf2woff2Lib = null;
-        log(`Warning: WOFF2 converter unavailable (${ttf2woff2Result.__loadError.message})`);
+        log(`Note: WOFF2 unavailable (${ttf2woff2Result.__loadError.message})`);
       } else {
         ttf2woff2Lib = resolveOptionalFn(ttf2woff2Result, "ttf2woff2");
         if (!ttf2woff2Lib) {
           woff2Available = false;
-          log("Warning: WOFF2 converter unavailable, continuing with TTF/WOFF only");
+          log("Note: WOFF2 unavailable, continuing with TTF + WOFF");
         }
       }
 
-      if (svgpathResult && svgpathResult.__loadError) {
-        svgpathLib = null;
-      } else {
-        svgpathLib = resolveOptionalFn(svgpathResult, "svgpath");
-      }
-
       log("Converter libraries loaded");
-      if (!svgpathLib) {
-        log("Warning: svgpath could not be loaded, using raw path data fallback");
-      }
     }
 
     async function loadRepoSvg(fileName) {
@@ -707,14 +800,10 @@
       const parser = new DOMParser();
       const doc = parser.parseFromString(svgText, "image/svg+xml");
       const parserError = doc.querySelector("parsererror");
-      if (parserError) {
-        throw new Error("Invalid SVG file");
-      }
+      if (parserError) throw new Error("Invalid SVG file");
 
       const svgRoot = doc.querySelector("svg");
-      if (!svgRoot) {
-        throw new Error("SVG root element not found");
-      }
+      if (!svgRoot) throw new Error("SVG root element not found");
 
       const viewBox = parseViewBox(svgRoot);
       const pathElements = Array.from(svgRoot.querySelectorAll("path"));
@@ -722,32 +811,23 @@
         throw new Error("No <path> elements found. This page currently supports path-based SVG icons.");
       }
 
+      // Scale from SVG coordinate space to font units (1024 em),
+      // and flip Y-axis (SVG Y goes down; font Y goes up).
       const sx = UNITS_PER_EM / viewBox.width;
       const sy = UNITS_PER_EM / viewBox.height;
-      const matrixA = sx;
-      const matrixB = 0;
-      const matrixC = 0;
-      const matrixD = -sy;
-      const matrixE = -viewBox.minX * sx;
-      const matrixF = UNITS_PER_EM + viewBox.minY * sy;
+      const ma = sx,  mb = 0;
+      const mc = 0,   md = -sy;
+      const me = -viewBox.minX * sx;
+      const mf = UNITS_PER_EM + viewBox.minY * sy;
 
       const rawPaths = pathElements
         .map((el) => (el.getAttribute("d") || "").trim())
         .filter(Boolean);
 
-      const transformedPaths = typeof svgpathLib === "function"
-        ? rawPaths.map((d) =>
-            svgpathLib(d)
-              .abs()
-              .matrix(matrixA, matrixB, matrixC, matrixD, matrixE, matrixF)
-              .round(4)
-              .toString()
-          )
-        : rawPaths;
+      if (!rawPaths.length) throw new Error("No valid path data found in SVG");
 
-      if (!transformedPaths.length) {
-        throw new Error("No valid path data found in SVG");
-      }
+      // Use the built-in transformer — no CDN dependency required.
+      const transformedPaths = rawPaths.map((d) => transformSvgPath(d, ma, mb, mc, md, me, mf));
 
       return transformedPaths.join(" ");
     }
